@@ -1,0 +1,29 @@
+name: Run Campsite Monitor
+
+on:
+  schedule:
+    # This runs the script every 20 minutes automatically
+    - cron: '*/20 * * * *'
+  workflow_dispatch: # Allows you to trigger it manually via a button
+
+jobs:
+  check-site:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Install dependencies
+      run: |
+        pip install playwright
+        playwright install chromium
+
+    - name: Execute Monitor Script
+      env:
+        DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      run: python monitor.py
