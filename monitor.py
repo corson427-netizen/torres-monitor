@@ -21,28 +21,15 @@ def send_discord_alert(message):
         print(f"Failed to dispatch alert: {e}")
 
 def verify_consecutive_circuit(page, target_start_date):
-    """
-    Simulates navigating Vértice's API/Layout response patterns 
-    to confirm synchronized availability across all 4 O-Trek sectors.
-    """
-    # 1. Look for seasonal text blocking input fields
     portal_text = page.locator("body").inner_text().lower()
     if "coming soon" in portal_text or "not available" in portal_text:
         return False
         
     try:
-        # Check if calendar container elements are active and read status tokens
-        # We parse the full page markup to read dynamic data attributes or availability tokens
         rendered_content = page.content().lower()
-        
-        # If dates are selectable, check if peak season tokens for your specific days are unblocked
-        # A simple check to see if the engine allows navigating to late December inventory
         if target_start_date in rendered_content and "sold out" not in rendered_content:
-            # We look for indications that the O-circuit bundle containing:
-            # Dickson -> Perros -> Grey -> Paine Grande is fully bookable
             camps = ["dickson", "perros", "grey", "paine grande"]
             all_clear = all(camp in rendered_content for camp in camps)
-            
             if all_clear:
                 return True
     except Exception as e:
@@ -53,12 +40,19 @@ def verify_consecutive_circuit(page, target_start_date):
 def check_campsites():
     print("Initiating custom calendar sequence via GitHub Actions...")
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        # Added an argument to bypass minor webgl/browser errors
+        browser = p.chromium.launch(headless=True, args=["--disable-web-security"])
         page = browser.new_page()
         
         try:
             print(f"Connecting to Vértice Engine: {VERTICE_PORTAL}")
-            page.goto(VERTICE_PORTAL, wait_until="networkidle")
+            
+            # CHANGED: Changed wait_until to "domcontentloaded" and added a generous 60s timeout
+            # This ensures slow background analytic trackings won't crash the script.
+            page.goto(VERTICE_PORTAL, wait_until="domcontentloaded", timeout=60000)
+            
+            # Give the JavaScript an extra 5 seconds just to settle down natively
+            page.wait_for_timeout(5000)
             
             match_found = False
             for target_date in START_WINDOW_DATES:
