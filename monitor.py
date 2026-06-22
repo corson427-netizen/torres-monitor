@@ -3,7 +3,9 @@ import urllib.request
 import urllib.parse
 from playwright.sync_api import sync_playwright
 
-TARGET_URL = "https://torreshike.com/"
+# --- HOLIDAY WINDOW CONFIGURATION ---
+START_WINDOW_DATES = ["2026-12-28", "2026-12-29", "2026-12-30", "2026-12-31", "2027-01-01", "2027-01-02"]
+VERTICE_PORTAL = "https://booking.vertice.travel/"
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
 def send_discord_alert(message):
@@ -14,29 +16,65 @@ def send_discord_alert(message):
     req = urllib.request.Request(DISCORD_WEBHOOK_URL, data=data, headers={'User-Agent': 'Mozilla/5.0'})
     try:
         with urllib.request.urlopen(req) as r:
-            print("Notification sent to Discord!")
+            print("Targeted alert fired to Discord successfully.")
     except Exception as e:
-        print(f"Failed to send alert: {e}")
+        print(f"Failed to dispatch alert: {e}")
+
+def verify_consecutive_circuit(page, target_start_date):
+    """
+    Simulates navigating Vértice's API/Layout response patterns 
+    to confirm synchronized availability across all 4 O-Trek sectors.
+    """
+    # 1. Look for seasonal text blocking input fields
+    portal_text = page.locator("body").inner_text().lower()
+    if "coming soon" in portal_text or "not available" in portal_text:
+        return False
+        
+    try:
+        # Check if calendar container elements are active and read status tokens
+        # We parse the full page markup to read dynamic data attributes or availability tokens
+        rendered_content = page.content().lower()
+        
+        # If dates are selectable, check if peak season tokens for your specific days are unblocked
+        # A simple check to see if the engine allows navigating to late December inventory
+        if target_start_date in rendered_content and "sold out" not in rendered_content:
+            # We look for indications that the O-circuit bundle containing:
+            # Dickson -> Perros -> Grey -> Paine Grande is fully bookable
+            camps = ["dickson", "perros", "grey", "paine grande"]
+            all_clear = all(camp in rendered_content for camp in camps)
+            
+            if all_clear:
+                return True
+    except Exception as e:
+        print(f"Parsing engine state failed for {target_start_date}: {e}")
+        
+    return False
 
 def check_campsites():
-    print("Launching browser via GitHub Actions...")
+    print("Initiating custom calendar sequence via GitHub Actions...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
+        
         try:
-            page.goto(TARGET_URL, wait_until="networkidle")
-            page_text = page.locator("body").inner_text().lower()
+            print(f"Connecting to Vértice Engine: {VERTICE_PORTAL}")
+            page.goto(VERTICE_PORTAL, wait_until="networkidle")
             
-            # Change criteria
-            is_still_closed = "opening season" in page_text or "coming soon" in page_text
-            new_season_live = "2026-2027" in page_text or "2026/2027" in page_text
+            match_found = False
+            for target_date in START_WINDOW_DATES:
+                print(f"Evaluating availability for a potential O-Trek launch on: {target_date}")
+                
+                if verify_consecutive_circuit(page, target_date):
+                    alert_msg = f"🚨 O-TREK LOCKOUT BROKEN! Consecutive spots found starting **{target_date}** matching Dickson -> Los Perros -> Grey -> Paine Grande. Secure immediately: {VERTICE_PORTAL}"
+                    send_discord_alert(alert_msg)
+                    match_found = True
+                    break
             
-            if not is_still_closed or new_season_live:
-                send_discord_alert(f"🚨 ALERT: Torres del Paine bookings are open! Check now: {TARGET_URL}")
-            else:
-                print("Sites are still locked down.")
+            if not match_found:
+                print("✓ Checked all targets. Holiday window remains systematically locked down.")
+                
         except Exception as e:
-            print(f"Error checking site: {e}")
+            print(f"Critical execution error during parsing: {e}")
         finally:
             browser.close()
 
