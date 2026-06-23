@@ -5,10 +5,8 @@ from playwright.sync_api import sync_playwright
 
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
-# --- CLEAN DIAGNOSTIC RUN (MARCH 18-19) ---
-# We use the clean base URL and let the browser type the dates manually
 BASE_URL = "https://booking.lastorres.com/"
-TARGET_CHECKIN = "18/03/2026"  # Day/Month/Year format standard for Chilean engines
+TARGET_CHECKIN = "18/03/2026"
 TARGET_CHECKOUT = "19/03/2026"
 
 def send_discord_alert(message):
@@ -36,39 +34,37 @@ def check_las_torres():
             page.goto(BASE_URL, wait_until="networkidle", timeout=60000)
             page.wait_for_timeout(5000)
             
-            # --- INTERACTION PHASE: CHOOSE GUESTS & DATES ---
-            print("👤 Setting guest count to 2 Adults...")
-            # Look for guest selector inputs and force '2'
-            guest_inputs = page.locator("input[readonly], .guest-select, [id*='passenger'], [id*='adult']").all()
-            if guest_inputs:
-                guest_inputs[0].click()
-                page.wait_for_timeout(1000)
+            # --- INTERACTION PHASE: NATIVE DROPDOWN SELECT ---
+            print("👤 Forcing guest count to 2 Adults...")
+            adult_select = page.locator("select[id*='adults']")
             
-            print(f"📅 Entering target travel dates: {TARGET_CHECKIN} to {TARGET_CHECKOUT}...")
-            # Search for inputs handling dates and clear/type the targets
-            date_inputs = page.locator("input[type='text'], .datepicker, [id*='date'], [id*='check']").all()
+            if adult_select.count() > 0:
+                # Use native select_option instead of click to bypass visibility issues on raw dropdowns
+                adult_select.first.select_option(value="2", force=True)
+                print("✓ Successfully set adults to 2 using value selection.")
+            else:
+                print("⚠️ Direct adult select element not found, attempting fallback...")
             
-            # Fallback execution: If direct inputs are locked behind complex calendars,
-            # we dump the live layout to look for active sector panels.
+            print(f"📅 Locating date inputs...")
+            # Target the text fields where dates are entered
+            date_inputs = page.locator("input[id*='date'], input[id*='check'], .roi-search-engine__date-input").all()
+            
+            # Let's inspect the page content right now to see if we've loaded the search context
             visible_text = page.locator("body").inner_text()
-            print(f"📊 Workspace size: {len(visible_text)} characters.")
-            
             lines = [line.strip() for line in visible_text.split("\n") if line.strip()]
-            print(f"📝 Actual rendering: {lines[:8]}")
+            print(f"📝 Current Page Snippet: {lines[:8]}")
             
-            # --- CHECK REAL ENTRIES IF RENDERED ---
+            # --- FALLBACK CHECK ---
             visible_text_lower = visible_text.lower()
-            
             for camp in ["seron", "cuernos", "chileno"]:
-                print(f"🧐 Looking for active grid signature for: {camp}")
                 if camp in visible_text_lower:
                     if "sold out" not in visible_text_lower and "agotado" not in visible_text_lower:
-                        print(f"🚨 ACTIVE INVENTORY UNCOVERED FOR {camp}!")
-                        send_discord_alert(f"🚨 SUCCESS: Active slot found for **{camp}** during automated session! Check immediately: {BASE_URL}")
+                        print(f"🚨 INVENTORY FOUND FOR {camp}!")
+                        send_discord_alert(f"🚨 SUCCESS: Active slot found for **{camp}**! Check: {BASE_URL}")
                     else:
-                        print(f"🔒 {camp} is present but shows sold out.")
+                        print(f"🔒 {camp} is visible but sold out.")
                 else:
-                    print(f"🔒 {camp} is completely absent from this frame wrapper.")
+                    print(f"🔍 {camp} sector not visible in current view frame.")
                     
         except Exception as e:
             print(f"❌ Interface automation dropped: {e}")
