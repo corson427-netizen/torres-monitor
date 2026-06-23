@@ -1,14 +1,19 @@
 import os
-import json
 import urllib.request
 import urllib.parse
+from playwright.sync_api import sync_playwright
 
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
-# --- MATCHING YOUR MARCH 18-19 TEST CONFIGURATION ---
-CHECKIN = "2026-03-18"
-CHECKOUT = "2026-03-19"
-ADULTS = "2"
+# --- MARCH 18-19 TEST CONFIGURATION ---
+TARGET_CHECKIN = "18-03-2026"   # DD-MM-YYYY format matching their visual calendar placeholder
+TARGET_CHECKOUT = "19-03-2026"  # DD-MM-YYYY format matching their visual calendar placeholder
+
+TARGETS = [
+    {"label": "Serón (TEST March 18-19)", "camp_id": "seron"},
+    {"label": "Cuernos (TEST March 18-19)", "camp_id": "cuernos"},
+    {"label": "Chileno (TEST March 18-19)", "camp_id": "chileno"}
+]
 
 def send_discord_alert(message):
     if not DISCORD_WEBHOOK_URL:
@@ -23,58 +28,75 @@ def send_discord_alert(message):
         print(f"❌ Discord failed: {e}")
 
 def check_las_torres():
-    print("🤖 Querying Las Torres Booking Engine Core...")
+    print("🤖 Launching Physical Interaction Watchtower (March 18-19)...")
     
-    # Target the underlying API distribution channel that powers their custom UI widget
-    api_url = f"https://api.engine.hoteligol.com/v1/availability?checkIn={CHECKIN}&checkOut={CHECKOUT}&adults={ADULTS}&children=0&lang=es&currency=USD&hotelId=10255"
-    
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Origin": "https://booking.lastorres.com",
-        "Referer": "https://booking.lastorres.com/"
-    }
-    
-    req = urllib.request.Request(api_url, headers=headers)
-    
-    try:
-        with urllib.request.urlopen(req, timeout=15) as response:
-            status_code = response.getcode()
-            raw_data = response.read().decode("utf-8")
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
+        context = browser.new_context(viewport={"width": 1440, "height": 900}, locale="es-CL")
+        page = context.new_page()
+        
+        try:
+            print("🔗 Opening booking portal...")
+            page.goto("https://booking.lastorres.com/", wait_until="networkidle", timeout=60000)
+            page.wait_for_timeout(4000)
             
-            print(f"📡 Server Response Channel Opened (Status: {status_code})")
-            data = json.loads(raw_data)
+            # Target the check-in field by placeholder text rather than technical ID attributes
+            print("⌨️ Simulating keystrokes for Check-In Date...")
+            checkin_field = page.locator("input[placeholder*='Entrada'], input[placeholder*='Check-in'], input[placeholder*='Check in']").first
+            checkin_field.click()
+            page.wait_for_timeout(500)
+            # Clear field out completely and physically type the date string
+            page.keyboard.press("Control+A")
+            page.keyboard.press("Backspace")
+            page.keyboard.type(TARGET_CHECKIN, delay=100)
+            page.keyboard.press("Enter")
+            page.wait_for_timeout(1000)
             
-            # Let's inspect what the database returned
-            rooms = data.get("rooms", [])
-            print(f"📊 Found {len(rooms)} available accommodation types for these dates.")
+            print("⌨️ Simulating keystrokes for Check-Out Date...")
+            checkout_field = page.locator("input[placeholder*='Salida'], input[placeholder*='Check-out'], input[placeholder*='Check out']").first
+            checkout_field.click()
+            page.wait_for_timeout(500)
+            page.keyboard.press("Control+A")
+            page.keyboard.press("Backspace")
+            page.keyboard.type(TARGET_CHECKOUT, delay=100)
+            page.keyboard.press("Enter")
+            page.wait_for_timeout(1000)
             
-            # Map out and test our search keywords
-            sectors_found = []
-            for room in rooms:
-                room_name = room.get("name", "").lower()
-                rate_plans = room.get("ratePlans", [])
+            # Fire the query
+            search_btn = page.locator("button[type='submit'], .btn-search, button:has-text('Buscar'), button:has-text('SEARCH')").first
+            print("💥 Triggering search click event...")
+            search_btn.click()
+            
+            print("⏳ Processing database response frames (15s)...")
+            page.wait_for_timeout(15000)
+            
+            visible_text = page.locator("body").inner_text()
+            visible_text_lower = visible_text.lower()
+            
+            lines = [line.strip() for line in visible_text.split("\n") if line.strip()]
+            print(f"\n📊 ACTIVE FRAME RENDER SNIPPET:\n{lines[:10]}")
+            
+            for target in TARGETS:
+                label = target["label"]
+                camp_id = target["camp_id"]
                 
-                # Verify there's a valid price option and it's not marked sold out
-                is_bookable = any(plan.get("available", False) for plan in rate_plans)
+                has_camp = camp_id in visible_text_lower
+                has_pricing = "$" in visible_text_lower or "usd" in visible_text_lower
+                is_sold_out = any(flag in visible_text_lower for flag in ["sold out", "no availability", "agotado"])
                 
-                if is_bookable:
-                    sectors_found.append(room.get("name"))
-                    print(f"   -> [OPEN BLOCK] {room.get('name')} - Price: {rate_plans[0].get('price', {}).get('total', 'N/A')} USD")
-            
-            # Evaluate Tripwires
-            for target_camp in ["seron", "serón", "cuernos", "chileno"]:
-                matched = [r for r in sectors_found if target_camp in r.lower()]
-                if matched:
-                    print(f"🚨 TRUE ALERT CONDITION MET FOR: {target_camp}!")
-                    send_discord_alert(f"🧪 API MATCH: Live bookable space found for **{matched[0]}** on March 18-19!")
+                print(f"\n🧐 Checking status for {label}:")
+                print(f"   -> Camp Match: {has_camp} | Pricing Active: {has_pricing} | Terminated Status: {is_sold_out}")
+                
+                if has_camp and has_pricing and not is_sold_out:
+                    print("🚨 TRUE ALERT CONDITION MET!")
+                    send_discord_alert(f"🧪 INTERACTION TEST MATCH: Active bookable space found for **{label}** on March 18-19!")
                 else:
-                    print(f"🔒 Sector {target_camp} is unavailable in raw inventory.")
+                    print("🔒 Locked / Unavailable.")
                     
-    except urllib.error.HTTPError as e:
-        print(f"⚠️ API Gatekeeper rejected direct call (HTTP {e.code}). Reverting to alternative endpoint payload...")
-    except Exception as e:
-        print(f"❌ Connection pipeline failure: {e}")
+        except Exception as e:
+            print(f"❌ Pipeline exception tripped: {e}")
+        finally:
+            browser.close()
 
 if __name__ == "__main__":
     check_las_torres()
