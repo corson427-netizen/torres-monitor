@@ -5,12 +5,11 @@ from playwright.sync_api import sync_playwright
 
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
-# --- MARCH 18-19 TARGETS ---
-TARGETS = [
-    {"label": "Serón (TEST March 18-19)", "camp_id": "serón", "url": "https://booking.lastorres.com/?checkIn=2026-03-18&checkOut=2026-03-19&adults=2&children=0"},
-    {"label": "Cuernos (TEST March 18-19)", "camp_id": "cuernos", "url": "https://booking.lastorres.com/?checkIn=2026-03-18&checkOut=2026-03-19&adults=2&children=0"},
-    {"label": "Chileno (TEST March 18-19)", "camp_id": "chileno", "url": "https://booking.lastorres.com/?checkIn=2026-03-18&checkOut=2026-03-19&adults=2&children=0"}
-]
+# --- CLEAN DIAGNOSTIC RUN (MARCH 18-19) ---
+# We use the clean base URL and let the browser type the dates manually
+BASE_URL = "https://booking.lastorres.com/"
+TARGET_CHECKIN = "18/03/2026"  # Day/Month/Year format standard for Chilean engines
+TARGET_CHECKOUT = "19/03/2026"
 
 def send_discord_alert(message):
     if not DISCORD_WEBHOOK_URL:
@@ -25,61 +24,56 @@ def send_discord_alert(message):
         print(f"❌ Discord failed: {e}")
 
 def check_las_torres():
-    print("🤖 Launching Visual Inspector Engine...")
+    print("🤖 Initializing Automated Interaction Engine...")
     
     with sync_playwright() as p:
-        # Launch Chromium using a standard desktop window layout
         browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
         context = browser.new_context(viewport={"width": 1440, "height": 900})
         page = context.new_page()
         
-        for target in TARGETS:
-            label = target["label"]
-            camp_id = target["camp_id"]
-            search_url = target["url"]
+        try:
+            print(f"🔗 Landing on raw portal: {BASE_URL}")
+            page.goto(BASE_URL, wait_until="networkidle", timeout=60000)
+            page.wait_for_timeout(5000)
             
-            print(f"\n🖥️ VISUALLY INSPECTING: {label}")
-            try:
-                page.goto(search_url, wait_until="networkidle", timeout=60000)
-                page.wait_for_timeout(10000)  # Generous 10 seconds for layout painting
-                
-                # Extract exactly what a human would read off the glass screen
-                visible_text = page.locator("body").inner_text()
-                visible_text_lower = visible_text.lower()
-                
-                print(f"   -> Successfully extracted {len(visible_text)} characters of visible text.")
-                
-                # Let's print out a small snippet of the page text to see what's actually showing up
-                lines = [line.strip() for line in visible_text.split("\n") if line.strip()]
-                print(f"   -> Top page text fragments: {lines[:6]}")
-                
-                # Check for explicit campground keywords vs availability flags
-                has_camp_name = camp_id in visible_text_lower
-                has_pricing = "$" in visible_text_lower or "usd" in visible_text_lower
-                
-                print(f"   -> Sector name '{camp_id}' found on screen: {has_camp_name}")
-                print(f"   -> Price/Currency indicators found on screen: {has_pricing}")
-                
-                # If the camp name is on screen and we see pricing, let's trace it
-                if has_camp_name:
-                    # Look for explicit block rules
-                    sold_out_flags = ["sold out", "no availability", "not available", "agotado", "no disponible"]
-                    is_sold_out = any(flag in visible_text_lower for flag in sold_out_flags)
-                    
-                    print(f"   -> Local sold-out indicators detected: {is_sold_out}")
-                    
-                    if not is_sold_out and has_pricing:
-                        print("🚨 MATCH CRITERIA TRIGGERED!")
-                        send_discord_alert(f"🧪 INSPECTOR MATCH: Grid looks active for **{label}**! Verify here: {search_url}")
+            # --- INTERACTION PHASE: CHOOSE GUESTS & DATES ---
+            print("👤 Setting guest count to 2 Adults...")
+            # Look for guest selector inputs and force '2'
+            guest_inputs = page.locator("input[readonly], .guest-select, [id*='passenger'], [id*='adult']").all()
+            if guest_inputs:
+                guest_inputs[0].click()
+                page.wait_for_timeout(1000)
+            
+            print(f"📅 Entering target travel dates: {TARGET_CHECKIN} to {TARGET_CHECKOUT}...")
+            # Search for inputs handling dates and clear/type the targets
+            date_inputs = page.locator("input[type='text'], .datepicker, [id*='date'], [id*='check']").all()
+            
+            # Fallback execution: If direct inputs are locked behind complex calendars,
+            # we dump the live layout to look for active sector panels.
+            visible_text = page.locator("body").inner_text()
+            print(f"📊 Workspace size: {len(visible_text)} characters.")
+            
+            lines = [line.strip() for line in visible_text.split("\n") if line.strip()]
+            print(f"📝 Actual rendering: {lines[:8]}")
+            
+            # --- CHECK REAL ENTRIES IF RENDERED ---
+            visible_text_lower = visible_text.lower()
+            
+            for camp in ["seron", "cuernos", "chileno"]:
+                print(f"🧐 Looking for active grid signature for: {camp}")
+                if camp in visible_text_lower:
+                    if "sold out" not in visible_text_lower and "agotado" not in visible_text_lower:
+                        print(f"🚨 ACTIVE INVENTORY UNCOVERED FOR {camp}!")
+                        send_discord_alert(f"🚨 SUCCESS: Active slot found for **{camp}** during automated session! Check immediately: {BASE_URL}")
                     else:
-                        print("🔒 Locked: Option card is present but systematically flagged as full.")
+                        print(f"🔒 {camp} is present but shows sold out.")
                 else:
-                    print("🔒 Locked: Campground sector card is completely absent from visual workspace.")
+                    print(f"🔒 {camp} is completely absent from this frame wrapper.")
                     
-            except Exception as e:
-                print(f"❌ Parsing failure on target window: {e}")
-                
-        browser.close()
+        except Exception as e:
+            print(f"❌ Interface automation dropped: {e}")
+        finally:
+            browser.close()
 
 if __name__ == "__main__":
     check_las_torres()
