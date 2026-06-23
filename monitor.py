@@ -5,9 +5,24 @@ from playwright.sync_api import sync_playwright
 
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
-BASE_URL = "https://booking.lastorres.com/"
-TARGET_CHECKIN = "18/03/2026"
-TARGET_CHECKOUT = "19/03/2026"
+# --- REAL TARGET MATRIX WITH DUAL-STAGE PASSTHROUGH ---
+TARGETS = [
+    {
+        "label": "Serón (Dec 30-31) - 2 Person Ground Spot",
+        "camp_id": "serón",
+        "url": "https://booking.lastorres.com/?checkIn=2026-12-30&checkOut=2026-12-31&adults=2&children=0"
+    },
+    {
+        "label": "Cuernos (Dec 04-05) - 2 Person Ground Spot",
+        "camp_id": "cuernos",
+        "url": "https://booking.lastorres.com/?checkIn=2026-12-04&checkOut=2026-12-05&adults=2&children=0"
+    },
+    {
+        "label": "Chileno (Dec 05-06) - 2 Person Ground Spot",
+        "camp_id": "chileno",
+        "url": "https://booking.lastorres.com/?checkIn=2026-12-05&checkOut=2026-12-06&adults=2&children=0"
+    }
+]
 
 def send_discord_alert(message):
     if not DISCORD_WEBHOOK_URL:
@@ -22,7 +37,7 @@ def send_discord_alert(message):
         print(f"❌ Discord failed: {e}")
 
 def check_las_torres():
-    print("🤖 Initializing Automated Interaction Engine...")
+    print("🤖 Launching Session-Authenticated Search Watchtower...")
     
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
@@ -30,44 +45,51 @@ def check_las_torres():
         page = context.new_page()
         
         try:
-            print(f"🔗 Landing on raw portal: {BASE_URL}")
-            page.goto(BASE_URL, wait_until="networkidle", timeout=60000)
-            page.wait_for_timeout(5000)
+            # STEP 1: Hit the root homepage to establish a legal user context and grab cookies
+            print("🎫 Validating base gateway session tokens...")
+            page.goto("https://booking.lastorres.com/", wait_until="networkidle", timeout=60000)
+            page.wait_for_timeout(4000)
             
-            # --- INTERACTION PHASE: NATIVE DROPDOWN SELECT ---
-            print("👤 Forcing guest count to 2 Adults...")
-            adult_select = page.locator("select[id*='adults']")
-            
-            if adult_select.count() > 0:
-                # Use native select_option instead of click to bypass visibility issues on raw dropdowns
-                adult_select.first.select_option(value="2", force=True)
-                print("✓ Successfully set adults to 2 using value selection.")
-            else:
-                print("⚠️ Direct adult select element not found, attempting fallback...")
-            
-            print(f"📅 Locating date inputs...")
-            # Target the text fields where dates are entered
-            date_inputs = page.locator("input[id*='date'], input[id*='check'], .roi-search-engine__date-input").all()
-            
-            # Let's inspect the page content right now to see if we've loaded the search context
-            visible_text = page.locator("body").inner_text()
-            lines = [line.strip() for line in visible_text.split("\n") if line.strip()]
-            print(f"📝 Current Page Snippet: {lines[:8]}")
-            
-            # --- FALLBACK CHECK ---
-            visible_text_lower = visible_text.lower()
-            for camp in ["seron", "cuernos", "chileno"]:
-                if camp in visible_text_lower:
-                    if "sold out" not in visible_text_lower and "agotado" not in visible_text_lower:
-                        print(f"🚨 INVENTORY FOUND FOR {camp}!")
-                        send_discord_alert(f"🚨 SUCCESS: Active slot found for **{camp}**! Check: {BASE_URL}")
+            # STEP 2: Loop through deep links within the authenticated browser context
+            for target in TARGETS:
+                label = target["label"]
+                camp_id = target["camp_id"]
+                search_url = target["url"]
+                
+                print(f"\n🚀 QUERYING LIVE SECTOR SEARCH: {label}")
+                page.goto(search_url, wait_until="load", timeout=60000)
+                
+                # Give the dynamic pricing engine ample time to fetch live availability blocks
+                print("⏳ Waiting 12 seconds for sector data cards to fully load...")
+                page.wait_for_timeout(12000)
+                
+                visible_text = page.locator("body").inner_text()
+                visible_text_lower = visible_text.lower()
+                
+                # Clean snippet tracking for execution visibility
+                lines = [line.strip() for line in visible_text.split("\n") if line.strip()]
+                print(f"   -> Rendered Data Snippet: {lines[:5]}")
+                
+                has_camp_name = camp_id in visible_text_lower
+                has_pricing = "$" in visible_text_lower or "usd" in visible_text_lower
+                is_sold_out = any(x in visible_text_lower for x in ["sold out", "no availability", "not available", "agotado", "no disponible"])
+                
+                print(f"   -> Camp ID visible: {has_camp_name} | Pricing active: {has_pricing} | Sold out text: {is_sold_out}")
+                
+                # The Golden Condition: If the camp is listed, has pricing indicators, and doesn't say sold out
+                if has_camp_name and has_pricing and not is_sold_out:
+                    # Filter for bare ground/own tent options
+                    ground_keywords = ["individual", "sitio", "solo sitio", "pitch", "own tent", "camping basic", "sin acampar"]
+                    if any(kw in visible_text_lower for kw in ground_keywords):
+                        print("🚨 TRUE ALERT CONDITION MET!")
+                        send_discord_alert(f"🚨 CONFIRMED OPENING: 2-person ground space found for **{label}**! Book immediately: {search_url}")
                     else:
-                        print(f"🔒 {camp} is visible but sold out.")
+                        print("🔒 Filtered: Camp found, but only premium setups or cabins are open.")
                 else:
-                    print(f"🔍 {camp} sector not visible in current view frame.")
+                    print("🔒 Locked: Sector is fully booked or unavailable.")
                     
         except Exception as e:
-            print(f"❌ Interface automation dropped: {e}")
+            print(f"❌ Automation pipeline exception: {e}")
         finally:
             browser.close()
 
