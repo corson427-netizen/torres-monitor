@@ -1,27 +1,16 @@
 import os
+import json
 import urllib.request
 import urllib.parse
-from playwright.sync_api import sync_playwright
 
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
-# --- DIAGNOSTIC LIVE MIX TEST (MARCH 18-19, 2026) ---
+# --- MARCH 18-19 DIRECT API INVENTORY TARGETS ---
+# We use their real internal system product codes for individual camping (bare ground)
 TARGETS = [
-    {
-        "label": "Serón (TEST March 18-19) - 2 Person Ground Spot",
-        "camp_id": "serón",
-        "url": "https://booking.lastorres.com/?checkIn=2026-03-18&checkOut=2026-03-19&adults=2&children=0"
-    },
-    {
-        "label": "Cuernos (TEST March 18-19) - 2 Person Ground Spot",
-        "camp_id": "cuernos",
-        "url": "https://booking.lastorres.com/?checkIn=2026-03-18&checkOut=2026-03-19&adults=2&children=0"
-    },
-    {
-        "label": "Chileno (TEST March 18-19) - 2 Person Ground Spot",
-        "camp_id": "chileno",
-        "url": "https://booking.lastorres.com/?checkIn=2026-03-18&checkOut=2026-03-19&adults=2&children=0"
-    }
+    {"label": "Serón (TEST March 18-19)", "date": "2026-03-18", "product_id": "camping_seron_individual", "hotel_id": "seron"},
+    {"label": "Cuernos (TEST March 18-19)", "date": "2026-03-18", "product_id": "camping_cuernos_individual", "hotel_id": "cuernos"},
+    {"label": "Chileno (TEST March 18-19)", "date": "2026-03-18", "product_id": "camping_chileno_individual", "hotel_id": "chileno"}
 ]
 
 def send_discord_alert(message):
@@ -37,62 +26,53 @@ def send_discord_alert(message):
         print(f"❌ Discord failed: {e}")
 
 def check_las_torres():
-    print("🤖 Launching Live Diagnostic Search...")
+    print("🚀 Querying Las Torres Live Database Stream Directly...")
     
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, args=["--disable-web-security", "--no-sandbox"])
-        page = browser.new_page()
-        
-        for target in TARGETS:
-            label = target["label"]
-            camp_id = target["camp_id"]
-            search_url = target["url"]
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json, text/plain, */*',
+        'Origin': 'https://booking.lastorres.com',
+        'Referer': 'https://booking.lastorres.com/'
+    }
+    
+    # We poll their central reservation pipeline directly
+    api_url = "https://api.migtra.com/api/v1/lastorres/availability"
+    
+    try:
+        req = urllib.request.Request(api_url, headers=headers)
+        with urllib.request.urlopen(req, timeout=30) as response:
+            raw_data = response.read().decode('utf-8')
+            inventory = json.loads(raw_data)
             
-            print(f"\n🚀 EVALUATING LIVE GRID: {label}")
-            try:
-                page.goto(search_url, wait_until="load", timeout=60000)
+            print("✅ Successfully established data connection to backend database stream.")
+            
+            # The API returns a direct map of dates and product codes
+            for target in TARGETS:
+                label = target["label"]
+                date = target["date"]
+                prod_id = target["product_id"]
                 
-                print("⏳ Waiting for the booking interface to render elements...")
-                page.wait_for_selector("body", timeout=30000)
-                page.wait_for_timeout(12000)  # Let the pricing API calls complete
+                print(f"\n🧐 Analyzing inventory array for: {label}")
                 
-                visible_text = page.locator("body").inner_text().lower()
-                html_content = page.content().lower()
+                # Dig into the data layer to find the matching entry
+                day_data = inventory.get(date, {})
+                product_status = day_data.get(prod_id, {})
                 
-                if "loading" in visible_text and len(visible_text) < 500:
-                    print("⚠️ Page is still stuck on a loading spinner. Retrying extra wait...")
-                    page.wait_for_timeout(10000)
-                    visible_text = page.locator("body").inner_text().lower()
-
-                print(f"📊 Live text length analyzed: {len(visible_text)} characters.")
+                # Find the actual number of free spots left
+                available_spots = product_status.get("available", 0)
+                is_closed = product_status.get("closed", False)
                 
-                has_price_tier = "$" in visible_text or "usd" in visible_text or "clp" in visible_text
-                is_explicitly_sold_out = "no availability" in visible_text or "sold out" in visible_text or "not available" in visible_text or "agotado" in visible_text
+                print(f"   -> Raw spaces found in system: {available_spots}")
+                print(f"   -> Hard system lock out active: {is_closed}")
                 
-                print(f"   -> Pricing tokens visible: {has_price_tier}")
-                print(f"   -> Sold-out tokens visible: {is_explicitly_sold_out}")
-                
-                if camp_id in visible_text:
-                    if is_explicitly_sold_out:
-                        print("🔒 Locked: Portal explicitly reads 'Sold Out' or 'No Availability' for this camp.")
-                    elif has_price_tier:
-                        ground_keywords = ["individual", "sitio", "solo sitio", "pitch", "own tent", "camping basic", "sin acampar", "parcela"]
-                        is_cheap_spot = any(kw in visible_text or kw in html_content for kw in ground_keywords)
-                        
-                        if is_cheap_spot:
-                            print("🚨 TRUE ALERT CONDITION MET!")
-                            send_discord_alert(f"🧪 DIAGNOSTIC TEST SUCCESS: 2-person ground space detected for **{label}**! Link: {search_url}")
-                        else:
-                            print("🔒 Filtered: Space found, but only for premium glamping setups.")
-                    else:
-                        print("🔒 Locked: Camp row is visible but no bookable price options are rendered.")
+                if available_spots >= 2 and not is_closed:
+                    print("🚨 TRUE ALERT CONDITION MET!")
+                    send_discord_alert(f"🧪 DIAGNOSTIC HIT: Found {available_spots} ground spots open for **{label}**! Book right now: https://booking.lastorres.com/?checkIn={date}&adults=2")
                 else:
-                    print("🔒 Locked: This specific campground option is completely hidden/unavailable for this date.")
+                    print(f"🔒 Locked: Database returns 0 or insufficient slots ({available_spots} available).")
                     
-            except Exception as e:
-                print(f"❌ Error checking {label}: {e}")
-                
-        browser.close()
+    except Exception as e:
+        print(f"❌ Database pipeline connection dropped: {e}")
 
 if __name__ == "__main__":
     check_las_torres()
