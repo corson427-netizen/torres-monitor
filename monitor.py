@@ -2,10 +2,11 @@ import os
 import json
 import urllib.request
 import urllib.parse
-import http.cookiejar
+from playwright.sync_api import sync_playwright
 
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
+# --- MARCH 18-19 TARGETS ---
 TARGETS = [
     {"label": "Serón (TEST March 18-19)", "date": "2026-03-18", "product_id": "camping_seron_individual"},
     {"label": "Cuernos (TEST March 18-19)", "date": "2026-03-18", "product_id": "camping_cuernos_individual"},
@@ -25,71 +26,74 @@ def send_discord_alert(message):
         print(f"❌ Discord failed: {e}")
 
 def check_las_torres():
-    print("🚀 Initializing deep browser simulation handshake...")
+    print("🤖 Initializing Chromium Security Bypass Watchtower...")
     
-    # Set up an automatic cookie jar to store and pass back session tracking
-    cj = http.cookiejar.CookieJar()
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
-    
-    # Realistic high-fidelity desktop headers
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Accept': 'application/json, text/plain, */*',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Cache-Control': 'no-cache',
-        'Pragma': 'no-cache',
-        'Origin': 'https://booking.lastorres.com',
-        'Referer': 'https://booking.lastorres.com/',
-        'Connection': 'keep-alive'
-    }
-    
-    api_url = "https://api.migtra.com/api/v1/lastorres/availability"
-    
-    try:
-        # Step 1: Hit the front page first to establish regular cookies
-        print("🎫 Registering initial user session cookies...")
-        init_req = urllib.request.Request("https://booking.lastorres.com/", headers={'User-Agent': headers['User-Agent']})
-        with opener.open(init_req, timeout=15) as _:
-            pass
-            
-        # Step 2: Query the real backend with the newly gained cookies
-        print("🔑 Pushing data payload via secure pipeline channel...")
-        req = urllib.request.Request(api_url, headers=headers)
+    with sync_playwright() as p:
+        # Launch real browser to satisfy Cloudflare check
+        browser = p.chromium.launch(headless=True, args=["--disable-web-security", "--no-sandbox"])
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        )
+        page = context.new_page()
         
-        with opener.open(req, timeout=15) as response:
-            raw_data = response.read().decode('utf-8')
-            inventory = json.loads(raw_data)
+        captured_data = {}
+
+        # Set up an active network sniffer to grab the database response
+        def handle_response(response):
+            if "api.migtra.com/api/v1/lastorres/availability" in response.url:
+                try:
+                    print("⚡ INTERCEPTED: Live backend database stream captured successfully!")
+                    nonlocal captured_data
+                    captured_data = response.json()
+                except Exception as e:
+                    print(f"⚠️ Error parsing intercepted database payload: {e}")
+
+        page.on("response", handle_response)
+        
+        # Load a base search URL to wake up the system data calls
+        test_url = "https://booking.lastorres.com/?checkIn=2026-03-18&checkOut=2026-03-19&adults=2&children=0"
+        print(f"🔗 Establishing browser gateway connection via: {test_url}")
+        
+        try:
+            page.goto(test_url, wait_until="load", timeout=60000)
+            # Give the browser a clean window to finish streaming data blocks
+            page.wait_for_timeout(15000)
             
-            print("✅ Handshake clean! Direct connection established.")
-            
-            for target in TARGETS:
-                label = target["label"]
-                date = target["date"]
-                prod_id = target["product_id"]
+            if not captured_data:
+                print("⚠️ Deep scan fallback: Triggering extra calendar interaction to force background data update...")
+                page.reload(wait_until="networkidle")
+                page.wait_for_timeout(10000)
+
+            if captured_data:
+                print("✅ Processing authentic live inventory metrics...")
                 
-                print(f"\n🧐 Analyzing inventory for: {label}")
-                
-                day_data = inventory.get(date, {})
-                product_status = day_data.get(prod_id, {})
-                
-                available_spots = product_status.get("available", 0)
-                is_closed = product_status.get("closed", False)
-                
-                print(f"   -> Spaces found: {available_spots}")
-                print(f"   -> System lockout: {is_closed}")
-                
-                if available_spots >= 2 and not is_closed:
-                    print("🚨 ALERT TRIGGERED!")
-                    send_discord_alert(f"🧪 Restock detected! {available_spots} slots open for **{label}**: https://booking.lastorres.com/?checkIn={date}&adults=2")
-                else:
-                    print(f"🔒 Locked: 0 or insufficient slots available.")
+                for target in TARGETS:
+                    label = target["label"]
+                    date = target["date"]
+                    prod_id = target["product_id"]
                     
-    except urllib.error.HTTPError as e:
-        print(f"❌ Security gateway block status ({e.code}): {e.reason}")
-        if e.code == 403:
-            print("💡 Cloudflare is strictly parsing the Python TLS handshake fingerprint. Let's try running again.")
-    except Exception as e:
-        print(f"❌ Interrupted: {e}")
+                    day_data = captured_data.get(date, {})
+                    product_status = day_data.get(prod_id, {})
+                    
+                    available_spots = product_status.get("available", 0)
+                    is_closed = product_status.get("closed", False)
+                    
+                    print(f"\n📊 {label}:")
+                    print(f"   -> System raw vacancies: {available_spots}")
+                    print(f"   -> Hard block indicator: {is_closed}")
+                    
+                    if available_spots >= 2 and not is_closed:
+                        print("🚨 MATCH FOUND IN DISPATCH DATABASE!")
+                        send_discord_alert(f"🧪 SUCCESS! Found {available_spots} raw spaces open for **{label}**: {test_url}")
+                    else:
+                        print("🔒 Locked: Checked database numbers directly, no 2-person ground space unblocked.")
+            else:
+                print("❌ CRITICAL ERROR: Browser failed to capture any backend data payloads from the gateway stream.")
+                
+        except Exception as e:
+            print(f"❌ Execution failure: {e}")
+        finally:
+            browser.close()
 
 if __name__ == "__main__":
     check_las_torres()
